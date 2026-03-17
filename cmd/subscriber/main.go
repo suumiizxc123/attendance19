@@ -24,7 +24,7 @@ func main() {
 	// Connect to PostgreSQL
 	dsn := os.Getenv("DATABASE_URL")
 	if dsn == "" {
-		dsn = "postgres://app:app@localhost:5432/appdb?sslmode=disable"
+		dsn = "postgres://app:app@localhost:5432/subdb?sslmode=disable"
 	}
 
 	var err error
@@ -93,44 +93,70 @@ func main() {
 		}(i)
 	}
 
-	log.Printf("consuming queue '%s' with %d workers", queueName, numWorkers)
+	log.Printf("subscriber: consuming queue '%s' with %d workers", queueName, numWorkers)
 
 	// HTTP server for listing saved data
 	http.HandleFunc("/requests", handleList)
 
-	log.Println("listening on :8080")
-	log.Fatal(http.ListenAndServe(":8080", nil))
+	log.Println("subscriber: listening on :8081")
+	log.Fatal(http.ListenAndServe(":8081", nil))
 }
 
-// consumeWorker reads MQTT/AMQP messages and saves them to PostgreSQL
+type requestPayload struct {
+	ID        int             `json:"id"`
+	Method    string          `json:"method"`
+	Path      string          `json:"path"`
+	Headers   json.RawMessage `json:"headers"`
+	Body      json.RawMessage `json:"body"`
+	CreatedAt string          `json:"created_at"`
+}
+
 func consumeWorker(id int, msgs <-chan amqp.Delivery) {
 	for msg := range msgs {
-		var payload map[string]any
+		var payload requestPayload
 		if err := json.Unmarshal(msg.Body, &payload); err != nil {
-			log.Printf("worker %d: invalid json, saving raw: %v", id, err)
-			escaped, _ := json.Marshal(string(msg.Body))
-			payload = map[string]any{"raw": json.RawMessage(escaped)}
+			log.Printf("worker %d: invalid json: %v — saving raw", id, err)
+			raw, _ := json.Marshal(string(msg.Body))
+			_, dbErr := db.Exec(
+				`INSERT INTO requests (method, path, headers, body) VALUES ($1, $2, $3, $4)`,
+				"MQTT", msg.RoutingKey, "{}", raw,
+			)
+			if dbErr != nil {
+				log.Printf("worker %d: insert error: %v", id, dbErr)
+				msg.Nack(false, true)
+				continue
+			}
+			msg.Ack(false)
+			continue
 		}
 
-		bodyJSON, _ := json.Marshal(payload)
+		headers := payload.Headers
+		if len(headers) == 0 {
+			headers = json.RawMessage("{}")
+		}
+		body := payload.Body
+		if len(body) == 0 {
+			body = json.RawMessage("null")
+		}
 
 		_, err := db.Exec(
-			`INSERT INTO requests (method, path, headers, body) VALUES ($1, $2, $3, $4)`,
-			"MQTT", msg.RoutingKey, "{}", bodyJSON,
+			`INSERT INTO requests (source_id, method, path, headers, body) VALUES ($1, $2, $3, $4, $5)`,
+			payload.ID, payload.Method, payload.Path, headers, body,
 		)
 		if err != nil {
 			log.Printf("worker %d: insert error: %v", id, err)
-			msg.Nack(false, true) // requeue on failure
+			msg.Nack(false, true)
 			continue
 		}
 
 		msg.Ack(false)
-		log.Printf("worker %d: saved message from routing_key=%s", id, msg.RoutingKey)
+		log.Printf("worker %d: saved source_id=%d path=%s", id, payload.ID, payload.Path)
 	}
 }
 
 type record struct {
 	ID        int             `json:"id"`
+	SourceID  *int            `json:"source_id"`
 	Method    string          `json:"method"`
 	Path      string          `json:"path"`
 	Headers   json.RawMessage `json:"headers"`
@@ -139,7 +165,7 @@ type record struct {
 }
 
 func handleList(w http.ResponseWriter, r *http.Request) {
-	rows, err := db.Query(`SELECT id, method, path, headers, body, created_at FROM requests ORDER BY id DESC LIMIT 100`)
+	rows, err := db.Query(`SELECT id, source_id, method, path, headers, body, created_at FROM requests ORDER BY id DESC LIMIT 100`)
 	if err != nil {
 		http.Error(w, "query failed", http.StatusInternalServerError)
 		return
@@ -149,7 +175,7 @@ func handleList(w http.ResponseWriter, r *http.Request) {
 	var records []record
 	for rows.Next() {
 		var rec record
-		if err := rows.Scan(&rec.ID, &rec.Method, &rec.Path, &rec.Headers, &rec.Body, &rec.CreatedAt); err != nil {
+		if err := rows.Scan(&rec.ID, &rec.SourceID, &rec.Method, &rec.Path, &rec.Headers, &rec.Body, &rec.CreatedAt); err != nil {
 			http.Error(w, "scan failed", http.StatusInternalServerError)
 			return
 		}

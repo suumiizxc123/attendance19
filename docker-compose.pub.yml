@@ -1,5 +1,5 @@
 services:
-  db:
+  db-pub:
     image: postgres:16-alpine
     environment:
       POSTGRES_USER: app
@@ -8,8 +8,8 @@ services:
     ports:
       - "5432:5432"
     volumes:
-      - pgdata:/var/lib/postgresql/data
-      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+      - pgdata-pub:/var/lib/postgresql/data
+      - ./init.pub.sql:/docker-entrypoint-initdb.d/init.sql
 
   rabbitmq:
     image: rabbitmq:3.13-management-alpine
@@ -23,16 +23,16 @@ services:
     volumes:
       - ./rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf
 
-  api:
-    build: .
-    ports:
-      - "8080:8080"
+  publisher:
+    build:
+      context: .
+      dockerfile: Dockerfile.pub
     environment:
-      DATABASE_URL: postgres://app:app@db:5432/appdb?sslmode=disable
+      DATABASE_URL: postgres://app:app@db-pub:5432/appdb?sslmode=disable
       RABBITMQ_URL: amqp://app:app@rabbitmq:5672/
     depends_on:
-      - db
+      - db-pub
       - rabbitmq
 
 volumes:
-  pgdata:
+  pgdata-pub:

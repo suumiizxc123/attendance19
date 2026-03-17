@@ -1,0 +1,27 @@
+services:
+  db-sub:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: app
+      POSTGRES_DB: subdb
+    ports:
+      - "5433:5432"
+    volumes:
+      - pgdata-sub:/var/lib/postgresql/data
+      - ./init.sub.sql:/docker-entrypoint-initdb.d/init.sql
+
+  subscriber:
+    build:
+      context: .
+      dockerfile: Dockerfile.sub
+    ports:
+      - "8081:8081"
+    environment:
+      DATABASE_URL: postgres://app:app@db-sub:5432/subdb?sslmode=disable
+      RABBITMQ_URL: amqp://app:app@host.docker.internal:5672/
+    depends_on:
+      - db-sub
+
+volumes:
+  pgdata-sub:

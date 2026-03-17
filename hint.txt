@@ -1,0 +1,42 @@
+# 1. POST JSON body
+curl -X POST http://localhost:8080/api/users \
+  -H "Content-Type: application/json" \
+  -d '{"name":"alice","age":30}'
+
+# 2. POST nested JSON
+curl -X POST http://localhost:8080/api/orders \
+  -H "Content-Type: application/json" \
+  -d '{"user":{"name":"bob","tags":["vip","new"]},"total":99.5}'
+
+# 3. POST JSON array
+curl -X POST http://localhost:8080/api/batch \
+  -H "Content-Type: application/json" \
+  -d '[1, 2, 3, "four"]'
+
+# 4. POST plain text
+curl -X POST http://localhost:8080/api/logs \
+  -d 'just plain text here'
+
+# 5. GET with no body
+curl http://localhost:8080/health
+
+# 6. PUT request
+curl -X PUT http://localhost:8080/api/users/1 \
+  -H "Content-Type: application/json" \
+  -d '{"name":"alice updated"}'
+
+# 7. PATCH request
+curl -X PATCH http://localhost:8080/api/users/1 \
+  -H "Content-Type: application/json" \
+  -d '{"age":31}'
+
+# 8. DELETE request
+curl -X DELETE http://localhost:8080/api/users/1
+
+# 9. POST with query params
+curl -X POST "http://localhost:8080/search?q=hello&page=1" \
+  -H "Content-Type: application/json" \
+  -d '{"filter":"active"}'
+
+# 10. List all saved requests
+curl http://localhost:8080/requests
