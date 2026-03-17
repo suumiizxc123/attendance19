@@ -10,8 +10,6 @@ services:
     volumes:
       - pgdata-sub:/var/lib/postgresql/data
       - ./init.sub.sql:/docker-entrypoint-initdb.d/init.sql
-    networks:
-      - shared
 
   subscriber:
     build:
@@ -21,16 +19,9 @@ services:
       - "8081:8081"
     environment:
       DATABASE_URL: postgres://app:app@db-sub:5432/subdb?sslmode=disable
-      RABBITMQ_URL: amqp://app:app@rabbitmq:5672/
+      RABBITMQ_URL: ${RABBITMQ_URL:-amqp://app:app@10.19.160.23:5672/}
     depends_on:
       - db-sub
-    networks:
-      - shared
 
 volumes:
   pgdata-sub:
-
-networks:
-  shared:
-    name: attendance19_shared
-    external: true

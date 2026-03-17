@@ -18,9 +18,17 @@ docker exec attendance19_db_1 psql -U app -d appdb -c "SELECT count(*) FROM requ
 └───────────────────────────────────────────────────┘     └──────────────────────────────────────────┘
 Run publisher side (PostgreSQL + RabbitMQ + Go publisher):
 
+# Use your Odoo DB connection
+DATABASE_URL="postgres://odoo:odoo@localhost:5432/odoo" \
+  docker-compose -f docker-compose.pub.yml up --build
 
-docker-compose -f docker-compose.pub.yml up --build
 Run subscriber side (PostgreSQL + Go subscriber):
 
 
 docker-compose -f docker-compose.sub.yml up --build
+
+
+# All services
+docker-compose -f docker-compose.sub.yml logs -f
+
+docker-compose -f docker-compose.sub.yml down

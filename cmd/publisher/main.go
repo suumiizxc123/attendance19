@@ -72,15 +72,36 @@ func main() {
 				continue
 			}
 
-			log.Printf("publisher: received pg notify: %s", notification.Extra)
+			log.Println("========== PG NOTIFY RECEIVED ==========")
+			log.Printf("channel: %s", notification.Channel)
 
-			// Validate JSON
+			// Parse and pretty-print the payload
 			var payload json.RawMessage
 			if json.Valid([]byte(notification.Extra)) {
 				payload = json.RawMessage(notification.Extra)
+
+				var parsed map[string]any
+				if err := json.Unmarshal(payload, &parsed); err == nil {
+					if name, ok := parsed["name"]; ok {
+						log.Printf("employee: %v", name)
+					}
+					if id, ok := parsed["id"]; ok {
+						log.Printf("id: %v", id)
+					}
+					if checkIn, ok := parsed["last_check_in"]; ok {
+						log.Printf("last_check_in: %v", checkIn)
+					}
+					if checkOut, ok := parsed["last_check_out"]; ok {
+						log.Printf("last_check_out: %v", checkOut)
+					}
+				}
+
+				pretty, _ := json.MarshalIndent(json.RawMessage(notification.Extra), "  ", "  ")
+				log.Printf("data:\n  %s", string(pretty))
 			} else {
 				escaped, _ := json.Marshal(notification.Extra)
 				payload = escaped
+				log.Printf("raw: %s", notification.Extra)
 			}
 
 			err := mqChan.Publish("", queueName, false, false, amqp.Publishing{
@@ -88,10 +109,11 @@ func main() {
 				Body:        payload,
 			})
 			if err != nil {
-				log.Printf("publisher: publish error: %v", err)
+				log.Printf("PUBLISH FAILED: %v", err)
 			} else {
-				log.Printf("publisher: published to queue '%s'", queueName)
+				log.Printf("PUBLISHED to queue '%s' (%d bytes)", queueName, len(payload))
 			}
+			log.Println("=========================================")
 
 		case <-time.After(90 * time.Second):
 			go listener.Ping()
