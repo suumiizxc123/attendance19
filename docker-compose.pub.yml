@@ -10,8 +10,6 @@ services:
       - "1883:1883"
     volumes:
       - ./rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf
-    networks:
-      - shared
 
   publisher:
     build:
@@ -20,11 +18,7 @@ services:
     environment:
       DATABASE_URL: ${DATABASE_URL:-postgres://odoo:odoo@host.docker.internal:5432/odoo?sslmode=disable}
       RABBITMQ_URL: amqp://app:app@rabbitmq:5672/
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       - rabbitmq
-    networks:
-      - shared
-
-networks:
-  shared:
-    name: attendance19_shared

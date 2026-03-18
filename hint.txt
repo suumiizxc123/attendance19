@@ -1,42 +1,68 @@
-# 1. POST JSON body
-curl -X POST http://localhost:8080/api/users \
-  -H "Content-Type: application/json" \
-  -d '{"name":"alice","age":30}'
+┌─────────────────── PUB SERVER ───────────────────┐     ┌─────────────── SUB SERVER ───────────────┐
+│                                                   │     │                                          │
+│  Odoo PostgreSQL (hr_employee table)              │     │                                          │
+│      │                                            │     │                                          │
+│      │ INSERT/UPDATE triggers pg_notify           │     │                                          │
+│      ▼                                            │     │                                          │
+│  Go Publisher ── LISTEN 'hr_employee' ──┐         │     │                                          │
+│                                         │         │     │   Go Subscriber (5 workers)              │
+│  RabbitMQ ◄── publish to queue ─────────┘         │     │      │                                   │
+│      │       (port 5672)                          │     │      consume from queue                  │
+│      └──────────────────────────────────────────────────────►  │                                   │
+│                                                   │     │      ▼                                   │
+│                                                   │     │   PostgreSQL (sub) → hr_employee table   │
+│                                                   │     │                                          │
+└───────────────────────────────────────────────────┘     └──────────────────────────────────────────┘
 
-# 2. POST nested JSON
-curl -X POST http://localhost:8080/api/orders \
-  -H "Content-Type: application/json" \
-  -d '{"user":{"name":"bob","tags":["vip","new"]},"total":99.5}'
+=== PUB SERVER (Odoo DB + RabbitMQ + Publisher) ===
 
-# 3. POST JSON array
-curl -X POST http://localhost:8080/api/batch \
-  -H "Content-Type: application/json" \
-  -d '[1, 2, 3, "four"]'
+# Start publisher (replace DB IP with your Odoo postgres IP)
+DATABASE_URL="postgres://odoo:odoo@172.18.0.2:5432/odoo19?sslmode=disable" \
+  docker-compose -f docker-compose.pub.yml up --build
 
-# 4. POST plain text
-curl -X POST http://localhost:8080/api/logs \
-  -d 'just plain text here'
+# View logs
+docker-compose -f docker-compose.pub.yml logs -f publisher
 
-# 5. GET with no body
-curl http://localhost:8080/health
+# Stop
+docker-compose -f docker-compose.pub.yml down
 
-# 6. PUT request
-curl -X PUT http://localhost:8080/api/users/1 \
-  -H "Content-Type: application/json" \
-  -d '{"name":"alice updated"}'
+# Create trigger on Odoo DB (run once)
+docker exec odoo19-db psql -U odoo -d odoo19 -c "
+CREATE OR REPLACE FUNCTION notify_hr_employee_change() RETURNS trigger AS \$\$
+BEGIN
+    PERFORM pg_notify('hr_employee', row_to_json(NEW)::text);
+    RETURN NEW;
+END;
+\$\$ LANGUAGE plpgsql;
 
-# 7. PATCH request
-curl -X PATCH http://localhost:8080/api/users/1 \
-  -H "Content-Type: application/json" \
-  -d '{"age":31}'
+DROP TRIGGER IF EXISTS hr_employee_notify ON hr_employee;
+CREATE TRIGGER hr_employee_notify
+    AFTER INSERT OR UPDATE ON hr_employee
+    FOR EACH ROW EXECUTE FUNCTION notify_hr_employee_change();
+"
 
-# 8. DELETE request
-curl -X DELETE http://localhost:8080/api/users/1
+=== SUB SERVER ===
 
-# 9. POST with query params
-curl -X POST "http://localhost:8080/search?q=hello&page=1" \
-  -H "Content-Type: application/json" \
-  -d '{"filter":"active"}'
+# Start subscriber (replace RABBITMQ_URL with pub server IP)
+RABBITMQ_URL="amqp://app:app@10.19.160.23:5672/" \
+  docker-compose -f docker-compose.sub.yml up --build
 
-# 10. List all saved requests
-curl http://localhost:8080/requests
+# View logs
+docker-compose -f docker-compose.sub.yml logs -f subscriber
+
+# Stop
+docker-compose -f docker-compose.sub.yml down
+
+# Check saved data
+docker exec attendance19_db-sub_1 psql -U app -d subdb -c "SELECT id, employee_id, name, last_check_in, last_check_out, created_at FROM hr_employee ORDER BY id DESC LIMIT 10;"
+
+# Count records
+docker exec attendance19_db-sub_1 psql -U app -d subdb -c "SELECT count(*) FROM hr_employee;"
+
+# HTTP endpoint to list employees
+curl http://localhost:8081/employees
+
+=== RabbitMQ Management ===
+
+# Web UI: http://<pub-server-ip>:15672
+# Login: app / app

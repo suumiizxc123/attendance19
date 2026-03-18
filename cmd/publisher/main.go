@@ -15,28 +15,15 @@ const queueName = "requests"
 func main() {
 	dsn := os.Getenv("DATABASE_URL")
 	if dsn == "" {
-		dsn = "postgres://app:app@localhost:5432/appdb?sslmode=disable"
+		dsn = "postgres://odoo:odoo@localhost:5432/odoo?sslmode=disable"
 	}
 
-	// Connect to RabbitMQ
 	rabbitURL := os.Getenv("RABBITMQ_URL")
 	if rabbitURL == "" {
 		rabbitURL = "amqp://app:app@localhost:5672/"
 	}
 
-	var mqConn *amqp.Connection
-	var err error
-	for i := 0; i < 30; i++ {
-		mqConn, err = amqp.Dial(rabbitURL)
-		if err == nil {
-			break
-		}
-		log.Printf("waiting for rabbitmq... (%v)", err)
-		time.Sleep(time.Second)
-	}
-	if err != nil {
-		log.Fatalf("could not connect to rabbitmq: %v", err)
-	}
+	mqConn := connectRabbitMQ(rabbitURL)
 	defer mqConn.Close()
 
 	mqChan, err := mqConn.Channel()
@@ -50,15 +37,13 @@ func main() {
 		log.Fatalf("could not declare queue: %v", err)
 	}
 
-	// Listen to PostgreSQL NOTIFY
 	listener := pq.NewListener(dsn, 10*time.Second, time.Minute, func(ev pq.ListenerEventType, err error) {
 		if err != nil {
 			log.Printf("listener error: %v", err)
 		}
 	})
 
-	err = listener.Listen("hr_employee")
-	if err != nil {
+	if err := listener.Listen("hr_employee"); err != nil {
 		log.Fatalf("could not listen: %v", err)
 	}
 	defer listener.Close()
@@ -67,56 +52,73 @@ func main() {
 
 	for {
 		select {
-		case notification := <-listener.Notify:
-			if notification == nil {
+		case n := <-listener.Notify:
+			if n == nil {
 				continue
 			}
-
-			log.Println("========== PG NOTIFY RECEIVED ==========")
-			log.Printf("channel: %s", notification.Channel)
-
-			// Parse and pretty-print the payload
-			var payload json.RawMessage
-			if json.Valid([]byte(notification.Extra)) {
-				payload = json.RawMessage(notification.Extra)
-
-				var parsed map[string]any
-				if err := json.Unmarshal(payload, &parsed); err == nil {
-					if name, ok := parsed["name"]; ok {
-						log.Printf("employee: %v", name)
-					}
-					if id, ok := parsed["id"]; ok {
-						log.Printf("id: %v", id)
-					}
-					if checkIn, ok := parsed["last_check_in"]; ok {
-						log.Printf("last_check_in: %v", checkIn)
-					}
-					if checkOut, ok := parsed["last_check_out"]; ok {
-						log.Printf("last_check_out: %v", checkOut)
-					}
-				}
-
-				pretty, _ := json.MarshalIndent(json.RawMessage(notification.Extra), "  ", "  ")
-				log.Printf("data:\n  %s", string(pretty))
-			} else {
-				escaped, _ := json.Marshal(notification.Extra)
-				payload = escaped
-				log.Printf("raw: %s", notification.Extra)
-			}
-
-			err := mqChan.Publish("", queueName, false, false, amqp.Publishing{
-				ContentType: "application/json",
-				Body:        payload,
-			})
-			if err != nil {
-				log.Printf("PUBLISH FAILED: %v", err)
-			} else {
-				log.Printf("PUBLISHED to queue '%s' (%d bytes)", queueName, len(payload))
-			}
-			log.Println("=========================================")
-
+			handleNotify(n, mqChan)
 		case <-time.After(90 * time.Second):
 			go listener.Ping()
 		}
+	}
+}
+
+func connectRabbitMQ(url string) *amqp.Connection {
+	var conn *amqp.Connection
+	var err error
+	for i := 0; i < 30; i++ {
+		conn, err = amqp.Dial(url)
+		if err == nil {
+			return conn
+		}
+		log.Printf("waiting for rabbitmq... (%v)", err)
+		time.Sleep(time.Second)
+	}
+	log.Fatalf("could not connect to rabbitmq: %v", err)
+	return nil
+}
+
+func handleNotify(n *pq.Notification, mqChan *amqp.Channel) {
+	log.Println("========== PG NOTIFY RECEIVED ==========")
+	log.Printf("channel: %s", n.Channel)
+
+	var payload []byte
+	if json.Valid([]byte(n.Extra)) {
+		payload = []byte(n.Extra)
+		printEmployeeInfo(payload)
+	} else {
+		escaped, _ := json.Marshal(n.Extra)
+		payload = escaped
+		log.Printf("raw: %s", n.Extra)
+	}
+
+	err := mqChan.Publish("", queueName, false, false, amqp.Publishing{
+		ContentType: "application/json",
+		Body:        payload,
+	})
+	if err != nil {
+		log.Printf("PUBLISH FAILED: %v", err)
+	} else {
+		log.Printf("PUBLISHED to queue '%s' (%d bytes)", queueName, len(payload))
+	}
+	log.Println("=========================================")
+}
+
+func printEmployeeInfo(data []byte) {
+	var parsed map[string]any
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		return
+	}
+	if name, ok := parsed["name"]; ok {
+		log.Printf("employee: %v", name)
+	}
+	if id, ok := parsed["id"]; ok {
+		log.Printf("id: %v", id)
+	}
+	if v, ok := parsed["last_check_in"]; ok {
+		log.Printf("last_check_in: %v", v)
+	}
+	if v, ok := parsed["last_check_out"]; ok {
+		log.Printf("last_check_out: %v", v)
 	}
 }
